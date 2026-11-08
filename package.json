@@ -1,0 +1,18 @@
+{
+  "name": "wa-guard-service",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "latest",
+    "grammy": "^1.30.0",
+    "pino": "^9.0.0"
+  }
+}
