@@ -7,6 +7,13 @@ export default {
   // Env example: ADMIN_IDS=123456789,987654321
   ADMIN_IDS: (process.env.ADMIN_IDS || '').split(',').map((s) => s.trim()).filter(Boolean),
 
+  // MySQL connection link (recommended on Render, so logins and data survive restarts).
+  // Looks like: mysql://user:password@host:3306/database
+  // Leave empty to use local files instead.
+  MYSQL_URL: process.env.MYSQL_URL || '',
+  // Most online MySQL hosts require a secure connection. Set MYSQL_SSL=false only if yours does not.
+  MYSQL_SSL: process.env.MYSQL_SSL !== 'false',
+
   // Link shown on the "Contact admin" button, e.g. https://t.me/your_username
   ADMIN_CONTACT_URL: process.env.ADMIN_CONTACT_URL || '',
 

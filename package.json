@@ -13,6 +13,7 @@
   "dependencies": {
     "@whiskeysockets/baileys": "latest",
     "grammy": "^1.30.0",
+    "mysql2": "^3.11.0",
     "pino": "^9.0.0"
   }
 }
