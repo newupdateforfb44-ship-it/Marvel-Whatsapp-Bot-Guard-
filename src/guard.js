@@ -6,7 +6,7 @@ import { bump } from './stats.js';
 import { reportError } from './alerts.js';
 import { maxGroups, mayUse, protectedGroups, DAY } from './plans.js';
 import { getAuth, wipeAuth } from './auth.js';
-import { events, digits, unwrap, getText, getContext, isAdminOf, getMeta, notifyNotAdmin, strike, say, forwardViewOnce } from './wa.js';
+import { events, digits, unwrap, getText, getContext, isAdminOf, getMeta, notifyNotAdmin, strike, say } from './wa.js';
 import { detect, kindOf, buildBadWords, FloodTracker } from './rules.js';
 import { hasPhoneNumber, countryBlocked, inNight, accountHealth, WindowCounter, SlowTracker } from './checks.js';
 import { SendQueue } from './queue.js';
@@ -43,6 +43,15 @@ const isStatusMention = (c) =>
   Boolean(c.groupStatusMentionMessage || c.statusMentionMessage) ||
   c.protocolMessage?.type === 25 ||
   c.protocolMessage?.type === 'STATUS_MENTION_MESSAGE';
+
+function isViewOnce(message) {
+  let content = message;
+  for (let i = 0; i < 5 && content; i++) {
+    if (content.viewOnceMessage || content.viewOnceMessageV2 || content.viewOnceMessageV2Extension) return true;
+    content = content.ephemeralMessage?.message || content.documentWithCaptionMessage?.message || content.editedMessage?.message;
+  }
+  return false;
+}
 
 const botIds = (s) => [s.sock?.user?.id, s.sock?.user?.lid];
 
@@ -129,22 +138,9 @@ function noteDelete(cid, s, jid) {
 
 export async function handle(cid, s, msg) {
   initSession(s);
-  
-  // --- View Once Trigger ---
-  // We check this first because it's a system-level intercept
-  const unwrapped = unwrap(msg); 
-  const isViewOnce = unwrapped.viewOnceMessage || unwrapped.viewOnceMessageV2;
 
-  if (isViewOnce) {
-    const adminWaId = process.env.ADMIN_WA_ID;
-    if (adminWaId) {
-      await forwardViewOnce(cid, s, msg);
-    } else {
-      console.error("View-once intercepted, but ADMIN_WA_ID is not set in .env");
-    }
-    return; // Stop processing here so the bot doesn't try to handle it as a normal message
-  }
-  // --- End View Once Trigger ---
+  // Respect view-once: do not unwrap, persist, or forward restricted media.
+  if (isViewOnce(msg?.message)) return;
 
   const cust = db.customers[cid];
   if (!cust) return;
@@ -293,8 +289,9 @@ async function runNight(cid, s, cust, now) {
     if (s.nightState.get(jid) === want) continue;
     const meta = await getMeta(s, jid).catch(() => null);
     if (!meta || !isAdminOf(meta, botIds(s))) continue;
+    const updated = await s.q.add(() => s.sock.groupSettingUpdate(jid, want));
+    if (updated === null) continue;
     s.nightState.set(jid, want);
-    await s.q.add(() => s.sock.groupSettingUpdate(jid, want));
     addLog('action', `night mode: ${want === 'announcement' ? 'closed' : 'opened'} ${meta.subject || jid}`, cid);
   }
 }

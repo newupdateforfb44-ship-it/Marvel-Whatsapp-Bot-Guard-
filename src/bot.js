@@ -779,7 +779,10 @@ async function route(ctx, data) {
       const c = ensureCustomer(ctx.from);
       refCodeOf(c);
       save();
-      const name = bot.botInfo?.username;
+      let name = '';
+      try {
+        name = bot.botInfo.username || '';
+      } catch {}
       const st = referralStats(c);
       return show(
         ctx,

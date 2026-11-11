@@ -2,7 +2,6 @@
 import { EventEmitter } from 'events';
 import { db, save } from './store.js';
 import { bump } from './stats.js';
-import { downloadContentFromSaveable } from '@whiskeysockets/baileys';
 
 // events: 'pairing-code'(cid, code) 'pairing-failed'(cid, why) 'open'(cid) 'logged-out'(cid) 'not-admin'(cid, groupName)
 //         'disconnected'(cid, code) 'reconnected'(cid) 'group-limit'(cid, groupName, limit)
@@ -95,9 +94,10 @@ export async function strike(cid, s, jid, senderJid, reason, g, { force = false 
   const count = db.warnings[key];
 
   if (g.warnLimit > 0 && count >= g.warnLimit) {
-    delete db.warnings[key];
     save();
     await s.sock.groupParticipantsUpdate(jid, [senderJid], 'remove');
+    delete db.warnings[key];
+    save();
     bump(cid, 'removed', jid);
     await say(s, jid, {
       text: `🚫 @${who} was removed for ${reason} (${g.warnLimit}/${g.warnLimit} warnings).`,
@@ -118,32 +118,4 @@ export async function strike(cid, s, jid, senderJid, reason, g, { force = false 
   const limitText = g.warnLimit > 0 ? `${count}/${g.warnLimit}` : `${count}`;
   await say(s, jid, { text: `⚠️ @${who}, ${reason} is not allowed here. Warning ${limitText}.${muteNote}`, mentions: [senderJid] });
   return 'warned';
-}
-
-/**
- * Forwards a view-once message by downloading it and re-sending it as a normal message.
- * This "breaks" the view-once restriction.
- */
-export async function forwardViewOnce(s, jid, message, targetJid) {
-    try {
-        // Extract the actual media message (image or video)
-        const mediaMsg = unwrap(message); 
-        const type = Object.keys(mediaMsg).find(k => k.includes('Message'));
-        
-        if (!type) throw new Error("No valid media found in message");
-
-        // Download the media using Baileys helper
-        const buffer = await downloadContentFromSaveable(s.sock, mediaMsg);
-        
-        // Normalize 'imageMessage' -> 'image' or 'videoMessage' -> 'video'
-        const mediaKey = type.replace('Message', '').toLowerCase();
-
-        // Send as a standard message to the admin
-        await s.sock.sendMessage(targetJid, { 
-            [mediaKey]: { data: buffer }, 
-            caption: `🚨 *View-Once Intercepted*\nFrom: ${jid}` 
-        });
-    } catch (e) {
-        console.error("ViewOnce Forwarding Error:", e);
-    }
 }

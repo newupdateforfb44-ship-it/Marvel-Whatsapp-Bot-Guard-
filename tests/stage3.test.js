@@ -280,6 +280,25 @@ test('night mode: closes once at night, opens once in the morning', async () => 
   assert.equal(calls.at(-1)[2], 'not_announcement');
 });
 
+test('night mode retries when WhatsApp rejects a group-setting update', async () => {
+  const { s, calls, sock } = setup({ groups: [GROUP] });
+  const h = hourIn('UTC');
+  const cust = db.customers.c1;
+  cust.guard.nightOn = true;
+  cust.guard.nightTz = 'UTC';
+  cust.guard.nightStart = h;
+  cust.guard.nightEnd = (h + 1) % 24;
+  sock.groupSettingUpdate = async () => { throw new Error('temporary failure'); };
+
+  await _test.runNight('c1', s, cust, Date.now());
+  assert.equal(s.nightState.get(GROUP), undefined);
+
+  sock.groupSettingUpdate = async (...args) => calls.push(['setting', ...args]);
+  await _test.runNight('c1', s, cust, Date.now());
+  assert.equal(s.nightState.get(GROUP), 'announcement');
+  assert.deepEqual(calls.filter((c) => c[0] === 'setting'), [['setting', GROUP, 'announcement']]);
+});
+
 test('lockdown: strict rules and closed groups, then the old rules come back', async () => {
   const { s, calls } = setup({ guard: { slowMode: 0, blockAllLinks: false } });
   db.customers.c1.groups[GROUP] = { name: '', first: 0, last: 0, msgs: 0 };

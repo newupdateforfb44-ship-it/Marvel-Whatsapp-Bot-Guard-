@@ -10,7 +10,7 @@ const { initStore, db } = await import('../src/store.js');
 const { handle } = await import('../src/guard.js');
 const { SendQueue } = await import('../src/queue.js');
 const { FloodTracker } = await import('../src/rules.js');
-const { events } = await import('../src/wa.js');
+const { events, strike } = await import('../src/wa.js');
 await initStore();
 
 const BOT = '1000';
@@ -167,4 +167,21 @@ test('warn / warnings / resetwarn', async () => {
   assert.match(sent.at(-1).text, /1\/3/);
   await handle('c1', s, tag('.resetwarn @3000'));
   assert.equal(db.warnings[`c1|${GROUP}|${MEMBER}`], undefined);
+});
+
+test('view-once messages are not unwrapped, copied, or forwarded', async () => {
+  const { s, sent, calls } = setup({ guard: { blockMedia: { image: true } } });
+  await handle('c1', s, msg(MEMBER, { viewOnceMessage: { message: { imageMessage: { caption: 'private' } } } }));
+  assert.equal(sent.length, 0);
+  assert.equal(calls.length, 0);
+});
+
+test('a failed removal preserves the warning count for a later retry', async () => {
+  const { s } = setup({ guard: { warnLimit: 1 } });
+  s.sock.groupParticipantsUpdate = async () => { throw new Error('not an admin'); };
+  await assert.rejects(
+    strike('c1', s, GROUP, `${MEMBER}@s.whatsapp.net`, 'breaking a rule', db.customers.c1.guard),
+    /not an admin/
+  );
+  assert.equal(db.warnings[`c1|${GROUP}|${MEMBER}`], 1);
 });
