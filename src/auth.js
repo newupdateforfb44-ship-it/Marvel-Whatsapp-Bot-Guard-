@@ -2,6 +2,7 @@
 import { useMultiFileAuthState, initAuthCreds, BufferJSON, proto } from '@whiskeysockets/baileys';
 import fs from 'fs';
 import { sqlEnabled, getPool } from './mysql.js';
+import { sealText, openText } from './crypto.js';
 
 const authDir = (cid) => `./auth/${cid}`;
 
@@ -12,11 +13,13 @@ async function useSqlAuthState(cid) {
     pool.query('INSERT INTO auth (id, cid, v) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v)', [
       id(name),
       String(cid),
-      JSON.stringify(data, BufferJSON.replacer),
+      sealText(JSON.stringify(data, BufferJSON.replacer)),
     ]);
   const read = async (name) => {
     const [rows] = await pool.query('SELECT v FROM auth WHERE id = ?', [id(name)]);
-    return rows.length ? JSON.parse(rows[0].v, BufferJSON.reviver) : null;
+    if (!rows.length) return null;
+    const raw = openText(rows[0].v);
+    return raw === null ? null : JSON.parse(raw, BufferJSON.reviver);
   };
   const remove = (name) => pool.query('DELETE FROM auth WHERE id = ?', [id(name)]);
 
