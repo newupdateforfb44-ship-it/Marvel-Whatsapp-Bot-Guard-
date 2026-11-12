@@ -16,7 +16,8 @@ const aud = ['255700000001@s.whatsapp.net', '255700000002@s.whatsapp.net', '2557
   '255700000004@s.whatsapp.net', '255700000005@s.whatsapp.net', '255700000006@s.whatsapp.net', '255700000007@s.whatsapp.net'];
 
 test('tags are capped at 50', () => {
-  const t = auto.pickStatusTags(aud.map((a) => a.split('@')[0]), aud);
+  const audience = Array.from({ length: 60 }, (_, i) => `255700000${String(i + 1).padStart(4, '0')}@s.whatsapp.net`);
+  const t = auto.pickStatusTags(audience.map((a) => a.split('@')[0]), audience);
   assert.equal(t.length, 50);
 });
 
@@ -45,9 +46,8 @@ test('no tags: content unchanged', async () => {
 test('group tag adds groupMentions, max 50 groups', async () => {
   const sent = [];
   const s = { q: { add: (f) => f() }, sock: { sendMessage: async (j, c) => sent.push(c) } };
-  await auto.postStatus(s, aud, { text: 'Hi' }, [], [
-    { jid: '1@g.us', subject: 'A' }, { jid: '2@g.us', subject: 'B' }, { jid: '3@g.us', subject: 'C' },
-  ]);
+  const groups = Array.from({ length: 60 }, (_, i) => ({ jid: `${i + 1}@g.us`, subject: `G${i + 1}` }));
+  await auto.postStatus(s, aud, { text: 'Hi' }, [], groups);
   assert.equal(sent[0].contextInfo.groupMentions.length, 50);
   assert.equal(sent[0].contextInfo.groupMentions[0].groupJid, '1@g.us');
 });

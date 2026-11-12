@@ -18,7 +18,7 @@ export function getPool() {
         waitForConnections: true,
         connectionLimit: 5,
         enableKeepAlive: true,
-        ssl: config.MYSQL_SSL ? { minVersion: 'TLSv1.2', rejectUnauthorized: false } : undefined,
+        ssl: config.MYSQL_SSL ? { minVersion: 'TLSv1.2', rejectUnauthorized: true, ...(config.MYSQL_CA ? { ca: config.MYSQL_CA } : {}) } : undefined,
       });
       await pool.query(
         'CREATE TABLE IF NOT EXISTS kv (k VARCHAR(64) PRIMARY KEY, v LONGTEXT NOT NULL)'

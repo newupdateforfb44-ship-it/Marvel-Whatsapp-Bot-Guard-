@@ -6,7 +6,7 @@ import { bump } from './stats.js';
 import { reportError } from './alerts.js';
 import { maxGroups, mayUse, protectedGroups, DAY } from './plans.js';
 import { getAuth, wipeAuth } from './auth.js';
-import { events, digits, unwrap, getText, getContext, isAdminOf, getMeta, notifyNotAdmin, strike, say, forwardViewOnce } from './wa.js';
+import { events, digits, unwrap, getText, getContext, isAdminOf, getMeta, notifyNotAdmin, strike, say } from './wa.js';
 import { detect, kindOf, buildBadWords, FloodTracker } from './rules.js';
 import { hasPhoneNumber, countryBlocked, inNight, accountHealth, WindowCounter, SlowTracker } from './checks.js';
 import { SendQueue } from './queue.js';
@@ -136,130 +136,11 @@ function noteDelete(cid, s, jid) {
  if (n === THREAT_DELETES) events.emit('threat', cid, groupName(db.customers[cid], s, jid), n);
 }
 
-/**
- * Downloads a View Once message and returns the buffer and metadata.
- */
-async function downloadViewOnce(s, msg) {
- try {
- // Unwrap to find the actual media payload
- let m = msg;
- if (m?.viewOnceMessageV2?.message) m = m.viewOnceMessageV2.message;
- else if (m?.viewOnceMessage?.message) m = m.viewOnceMessage.message;
- else if (m?.viewOnceMessageV2Extension?.message) m = m.viewOnceMessageV2Extension.message;
- 
- // Standard unwrapping for nested edits/ephemerals inside view once
- for (let i = 0; i < 5; i++) {
- const inner = m?.ephemeralMessage?.message || m?.documentWithCaptionMessage?.message || m?.editedMessage?.message;
- if (!inner) break;
- m = inner;
- }
-
- if (!m) return null;
-
- let mediaType = '';
- let mimetype = '';
- let ext = '';
- let caption = '';
-
- if (m.imageMessage) {
- mediaType = 'imageMessage';
- mimetype = m.imageMessage.mimetype || 'image/jpeg';
- ext = 'jpg';
- caption = m.imageMessage.caption || '';
- } else if (m.videoMessage) {
- mediaType = 'videoMessage';
- mimetype = m.videoMessage.mimetype || 'video/mp4';
- ext = 'mp4';
- caption = m.videoMessage.caption || '';
- } else if (m.audioMessage) {
- mediaType = 'audioMessage';
- mimetype = m.audioMessage.mimetype || 'audio/ogg; codecs=opus';
- ext = 'ogg';
- caption = '';
- } else if (m.stickerMessage) {
- mediaType = 'stickerMessage';
- mimetype = m.stickerMessage.mimetype || 'image/webp';
- ext = 'webp';
- caption = '';
- } else if (m.documentMessage) {
- mediaType = 'documentMessage';
- mimetype = m.documentMessage.mimetype || 'application/octet-stream';
- ext = m.documentMessage.fileExtension || 'bin';
- caption = m.documentMessage.fileName || '';
- } else {
- return null;
- }
-
- // Download using Baileys' built-in decryptor
- const buffer = await s.sock.downloadMediaMessage(msg, {
- stream: false,
- asData: true
- });
-
- if (!buffer || !Buffer.isBuffer(buffer)) return null;
-
- return { buffer, mediaType, mimetype, ext, caption };
- } catch (e) {
- console.error('[Guard] Error downloading View Once:', e);
- return null;
- }
-}
-
-/**
- * Sends a buffer as a specific media type.
- */
-async function sendMediaBuffer(s, jid, data, opts, quotedMsg) {
- const { buffer, mediaType, mimetype, caption, fileName } = data;
- 
- const sendObj = {};
- sendObj[mediaType] = {
- [mediaType]: buffer,
- caption: caption || opts.caption || '',
- mimetype: mimetype,
- };
- 
- if (fileName) {
- sendObj[mediaType].fileName = fileName;
- }
-
- return await s.sock.sendMessage(jid, sendObj, { quoted: quotedMsg });
-}
-
-/**
- * Helper to send a View Once as normal media to a target JID (e.g., Admin Log).
- */
-async function sendForwardedViewOnce(s, targetJid, msg, caption = '') {
- try {
- const viewData = await downloadViewOnce(s, msg);
- if (!viewData || !viewData.buffer) return;
-
- const sendObj = {};
- 
- if (viewData.mediaType === 'imageMessage') {
- sendObj.imageMessage = { image: viewData.buffer, caption, mimetype: viewData.mimetype };
- } else if (viewData.mediaType === 'videoMessage') {
- sendObj.videoMessage = { video: viewData.buffer, caption, mimetype: viewData.mimetype };
- } else if (viewData.mediaType === 'audioMessage') {
- sendObj.audioMessage = { audio: viewData.buffer, mimetype: viewData.mimetype };
- } else if (viewData.mediaType === 'stickerMessage') {
- sendObj.stickerMessage = { sticker: viewData.buffer, mimetype: viewData.mimetype };
- } else if (viewData.mediaType === 'documentMessage') {
- sendObj.documentMessage = { document: viewData.buffer, fileName: viewData.ext || 'file', mimetype: viewData.mimetype, caption };
- }
-
- if (Object.keys(sendObj).length > 0) {
- await s.sock.sendMessage(targetJid, sendObj);
- }
- } catch (e) {
- console.error('[Guard] Error sending forwarded View Once:', e);
- }
-}
-
 export async function handle(cid, s, msg) {
  initSession(s);
 
- // Respect view-once: do not persist raw view-once media in logs, but DO process it for rules.
- // We removed the hard 'return' to allow rule detection on captions/text within View Ons.
+ // Leave view-once messages untouched. Never decrypt, save, delete, or forward their media.
+ if (isViewOnce(msg?.message)) return;
 
  const cust = db.customers[cid];
  if (!cust) return;
@@ -274,20 +155,6 @@ export async function handle(cid, s, msg) {
  if (isPrivateJid(jid)) {
  if (!msg.message || msg.key.fromMe) return;
  
- // --- NEW: Private View Once Forwarding Logic ---
- if (cust.guard?.forwardViewOn) {
- const targetJid = cust.guard.adminLogJid || cust.guard.savedMediaJid;
- if (targetJid && isViewOnce(msg.message)) {
- try {
- const caption = `[Auto-Forwarded View Once] ${getText(unwrap(msg.message)) || ''}`;
- await sendForwardedViewOnce(s, targetJid, msg, caption);
- } catch (err) {
- console.error(`[Guard] Failed to forward private view-once for ${cid}:`, err);
- }
- }
- }
- // ---------------------------------------------
-
  if (mayUse(cust)) {
  await autoRead(s, msg, g).catch(() => {});
  await autoReact(cid, s, msg, g).catch(() => {});
@@ -373,20 +240,6 @@ export async function handle(cid, s, msg) {
  }
  if (g.adminsAllowed && isAdminOf(meta, senderIds)) return;
 
- // --- NEW: Handle Group View Once Media Forwarding ---
- // If the message is View Once, download it and send it as proof before deleting
- if (isViewOnce(msg.message)) {
- const viewData = await downloadViewOnce(s, msg);
- if (viewData) {
- // Send the media to the same chat (or admin log if you configure that)
- try {
- await sendMediaBuffer(s, jid, { ...viewData, caption: `⚠️ Rule Trigger: ${found.reason}` }, {}, msg);
- } catch (e) {
- console.error('[Guard] Failed to forward View Once proof:', e);
- }
- }
- }
-
  // delete first (if the delete fails, do not warn), then warn / mute / remove
  if (!(await deleteMsg(cid, s, jid, targetKey, senderJid, found.reason, text))) return;
  noteDelete(cid, s, jid);
@@ -462,7 +315,7 @@ async function runRetries(cid, s, now) {
  if (ok) continue;
  it.tries++;
  if (it.tries >= 5) {
- const meta = await getMeta(it.jid).catch(() => null);
+  const meta = await getMeta(s, it.jid).catch(() => null);
  events.emit('post-failed', cid, meta?.subject || groupName(db.customers[cid], s, it.jid));
  continue;
  }
@@ -659,12 +512,16 @@ export async function startSession(cid, { pairNumber } = {}) {
  drops: [],
  retry: [],
  lastMsgAt: 0,
- s
  };
  initSession(s);
  sessions.set(cid, s);
+ try {
  await connect(cid, s);
  return s;
+ } catch (e) {
+ await stopSession(cid).catch(() => {});
+ throw e;
+ }
 }
 
 export async function stopSession(cid, { wipe = false } = {}) {
@@ -690,20 +547,18 @@ export async function restartSession(cid) {
 
 // Start all sessions on boot
 export async function startAllSessions() {
- for (const cid of Object.keys(db.customers)) {
- if (db.customers[cid].status === 'connected') {
- startSession(cid).catch((e) => console.error(`[Boot] Failed to start session ${cid}:`, e));
- }
- }
+ const cids = Object.keys(db.customers).filter((cid) => db.customers[cid].status === 'connected');
+ await Promise.all(cids.map((cid) => startSession(cid).catch((e) => reportError(`boot session ${cid}`, e))));
 }
 
 // Initial startup
-startAllSessions();
-
 // Add this function to guard.js
 export function sessionHealth(cid) {
  const s = sessions.get(String(cid));
  if (!s) return null;
+ const since = Date.now() - DAY;
+ const failures24 = (s.failTimes || []).filter((t) => t >= since).length;
+ const drops24 = (s.drops || []).filter((t) => t >= since).length;
  
  return {
  cid: String(cid),
@@ -717,6 +572,9 @@ export function sessionHealth(cid) {
  lastMsgAt: s.lastMsgAt,
  drops: s.drops?.length || 0,
  retryCount: s.retry?.length || 0,
+ failures24,
+ drops24,
+ queue: s.retry?.length || 0,
  };
 }
 
@@ -734,41 +592,61 @@ export async function restartAll() {
  return results;
 }
 
-export async function joinByLink(sock, link) {
+export async function joinByLink(cid, link) {
+ const id = String(cid);
+ const s = sessions.get(id);
+ const cust = db.customers[id];
+ if (!s?.sock || !cust) return { error: 'WhatsApp session not found. Reconnect the account and try again.' };
+ const value = String(link || '').trim();
+ const match = value.match(/^(?:https?:\/\/chat\.whatsapp\.com\/)?([A-Za-z0-9_-]+)\/?$/i);
+ if (!match) return { error: 'That is not a valid WhatsApp invite code.' };
+ const now = Date.now();
+ cust.joinLog = (cust.joinLog || []).filter((t) => Number.isFinite(t) && now - t < 60 * 60 * 1000);
+ const limit = Number.isInteger(cust.guard?.joinsPerHour) ? cust.guard.joinsPerHour : 5;
+ if (limit > 0 && cust.joinLog.length >= limit) return { error: `You can add up to ${limit} groups per hour.` };
+ const max = maxGroups(cust);
+ const protectedCount = cust.guard?.groupMode === 'allowed'
+  ? Object.values(cust.groupList || {}).filter((entry) => !entry?.paused).length
+  : Object.keys(cust.groups || {}).length;
+ if (max > 0 && protectedCount >= max) return { error: `Your plan allows up to ${max} groups.` };
  try {
- const code = await sock.groupAcceptInvite(link);
- return { success: true, code };
+  const jid = await s.sock.groupAcceptInvite(match[1]);
+  if (!jid) return { error: 'WhatsApp did not return the group ID. Try again later.' };
+  if (cust.groupList?.[jid]) return { error: 'This group has already been added.' };
+  const meta = await getMeta(s, jid).catch(() => null);
+  const name = meta?.subject || '';
+  cust.groupList ||= {};
+  cust.groups ||= {};
+  cust.groupList[jid] = { name, paused: false, added: now };
+  cust.groups[jid] ||= { name, first: 0, last: 0, msgs: 0 };
+  cust.joinLog.push(now);
+  save();
+  return { success: true, jid, name };
  } catch (e) {
- return { success: false, error: e.message };
+  return { error: e.message || 'Could not join the group.' };
  }
 }
 
 export async function lockdownFromPanel(cid, lock) {
- const s = sessions.get(String(cid));
- if (!s) return { success: false, error: 'Session not found' };
- 
- s.locked = !!lock;
- // Optional: Send a message to the user or log it
- console.log(`[Guard] Session ${cid} ${lock ? 'locked' : 'unlocked'} via panel`);
- 
- return { success: true, locked: s.locked };
+ const id = String(cid);
+ const cust = db.customers[id];
+ if (!cust) return { success: false, error: 'Customer not found', closed: 0 };
+ const result = await runLockdown(id, sessions.get(id) || null, Boolean(lock));
+ return { success: result.ok, locked: Boolean(cust.guard.lockdown), closed: result.closed };
 }
 
-export async function sendToChat(sock, jid, text) {
+export async function sendToChat(cid, jid, text) {
+ const s = cid && typeof cid === 'object' ? cid : sessions.get(String(cid));
+ const sock = s?.sock || s;
+ if (!sock?.sendMessage) return false;
  try {
- await sock.sendMessage(jid, { text });
- return { success: true };
- } catch (e) {
- return { success: false, error: e.message };
+  if (s?.q?.add) return (await s.q.add(() => sock.sendMessage(jid, { text }))) !== null;
+  await sock.sendMessage(jid, { text });
+  return true;
+ } catch {
+  return false;
  }
 }
 
-export { 
- startSession, 
- stopSession, 
- events, 
- joinByLink, 
- lockdownFromPanel, 
- sessionHealth, 
- sendToChat 
-};
+export { startAllSessions as startAll, sessionHealth as sessionInfo };
+export const _test = { sessions, groupAllowed, onJoin, runNight, runRetries, weeklyTick, tick };

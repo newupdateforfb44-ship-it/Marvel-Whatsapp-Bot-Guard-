@@ -11,7 +11,7 @@ export const events = new EventEmitter();
 export const digits = (jid) => String(jid || '').split('@')[0].split(':')[0].replace(/\D/g, '');
 
 /**
- * Unwraps nested messages including View Once containers.
+ * Unwraps ordinary nested messages while preserving View Once wrappers.
  * Returns the innermost message object.
  */
 export function unwrap(message) {
@@ -19,8 +19,6 @@ export function unwrap(message) {
  for (let i = 0; i < 5; i++) {
   const inner =
    m?.ephemeralMessage?.message ||
-   m?.viewOnceMessage?.message ||
-   m?.viewOnceMessageV2?.message ||
    m?.documentWithCaptionMessage?.message ||
    m?.editedMessage?.message;
   if (!inner) break;
@@ -33,177 +31,12 @@ export function unwrap(message) {
  * Checks if a message is a View Once message.
  */
 export function isViewOnce(msg) {
- return !!(msg.viewOnceMessage || msg.viewOnceMessageV2 || msg.viewOnceMessageV2Extension);
-}
-
-/**
- * Extracts the actual media payload from a View Once message.
- */
-export function getMediaFromViewOnce(msg) {
- if (msg.viewOnceMessage) return msg.viewOnceMessage.message;
- if (msg.viewOnceMessageV2) return msg.viewOnceMessageV2.message;
- if (msg.viewOnceMessageV2Extension) return msg.viewOnceMessageV2Extension.message;
- return null;
-}
-
-/**
- * Downloads a View Once message and returns it as a Buffer.
- * @param {Object} sock - The Baileys socket instance.
- * @param {Object} msg - The original message object.
- * @returns {Promise<Buffer|null>}
- */
-export async function downloadViewOnce(sock, msg) {
- try {
-  // 1. Identify if it's view once and get the inner media object
-  const mediaPayload = getMediaFromViewOnce(msg);
-  if (!mediaPayload) return null;
-
-  // 2. Determine media type based on what's inside the payload
-  let mediaType;
-  if (mediaPayload.imageMessage) mediaType = 'image';
-  else if (mediaPayload.videoMessage) mediaType = 'video';
-  else if (mediaPayload.audioMessage) mediaType = 'audio';
-  else if (mediaPayload.stickerMessage) mediaType = 'sticker';
-  else if (mediaPayload.documentMessage) mediaType = 'document';
-  else if (mediaPayload.voiceMessage) mediaType = 'audio'; // Voice is often just audio
-  else return null;
-
-  // 3. Download the media using Baileys' built-in decryptor
-  // We pass the original msg because downloadMediaMessage handles the decryption internally
-  const buffer = await sock.downloadMediaMessage(msg, {
-   stream: false,
-   asData: true,
-  });
-
-  return buffer;
- } catch (e) {
-  console.error('[WA] Error downloading View Once:', e);
-  return null;
+ let m = msg;
+ for (let i = 0; i < 6 && m; i++) {
+  if (m.viewOnceMessage || m.viewOnceMessageV2 || m.viewOnceMessageV2Extension) return true;
+  m = m.ephemeralMessage?.message || m.documentWithCaptionMessage?.message || m.editedMessage?.message;
  }
-}
-
-/**
- * Sends a buffer as the appropriate media type.
- * @param {Object} sock - The Baileys socket instance.
- * @param {string} jid - The target JID.
- * @param {Buffer} buffer - The media buffer.
- * @param {Object} mediaMeta - Metadata like mimetype, caption, etc.
- * @param {Object} quotedMsg - Optional quoted message object.
- */
-export async function sendMediaBuffer(sock, jid, buffer, mediaMeta, quotedMsg = null) {
- if (!buffer || !Buffer.isBuffer(buffer)) return;
-
- const sendObj = {};
-
- if (mediaMeta.type === 'image') {
-  sendObj.imageMessage = {
-   image: buffer,
-   caption: mediaMeta.caption || '',
-   mimetype: mediaMeta.mimetype || 'image/jpeg',
-  };
- } else if (mediaMeta.type === 'video') {
-  sendObj.videoMessage = {
-   video: buffer,
-   caption: mediaMeta.caption || '',
-   mimetype: mediaMeta.mimetype || 'video/mp4',
-  };
- } else if (mediaMeta.type === 'audio') {
-  sendObj.audioMessage = {
-   audio: buffer,
-   mimetype: mediaMeta.mimetype || 'audio/ogg; codecs=opus',
-   ptt: mediaMeta.ptt || false, // If it was a voice note (PTT)
-  };
- } else if (mediaMeta.type === 'sticker') {
-  sendObj.stickerMessage = {
-   sticker: buffer,
-   mimetype: mediaMeta.mimetype || 'image/webp',
-  };
- } else if (mediaMeta.type === 'document') {
-  sendObj.documentMessage = {
-   document: buffer,
-   fileName: mediaMeta.fileName || 'file',
-   mimetype: mediaMeta.mimetype || 'application/octet-stream',
-   caption: mediaMeta.caption || '',
-  };
- }
-
- // Add context info if provided (e.g., to preserve quotes/replies)
- if (quotedMsg && quotedMsg.contextInfo) {
-  sendObj[Object.keys(sendObj)[0]].contextInfo = quotedMsg.contextInfo;
- }
-
- await sock.sendMessage(jid, sendObj, {
-  quoted: quotedMsg,
- });
-}
-
-/**
- * Helper to forward a View Once message as normal media.
- * This is the main function you should call when you want to "save" or "forward" a View Once.
- * 
- * @param {Object} s - The session/socket object.
- * @param {string} targetJid - The JID to send the forwarded media to.
- * @param {Object} msg - The original message object received.
- * @param {boolean} keepContext - If true, preserves the original quote/context info.
- */
-export async function forwardViewOnce(s, targetJid, msg, keepContext = true) {
- try {
-  // 1. Download the media buffer
-  const buffer = await downloadViewOnce(s.sock, msg);
-  if (!buffer) {
-   await say(s, targetJid, "❌ Failed to download View Once media.");
-   return;
-  }
-
-  // 2. Get metadata from the unwrapped media
-  const mediaPayload = getMediaFromViewOnce(msg);
-  if (!mediaPayload) return;
-
-  let mediaType = '';
-  let mimetype = '';
-  let caption = '';
-  let fileName = 'file';
-  let ptt = false;
-
-  if (mediaPayload.imageMessage) {
-   mediaType = 'image';
-   mimetype = mediaPayload.imageMessage.mimetype || 'image/jpeg';
-   caption = mediaPayload.imageMessage.caption || '';
-  } else if (mediaPayload.videoMessage) {
-   mediaType = 'video';
-   mimetype = mediaPayload.videoMessage.mimetype || 'video/mp4';
-   caption = mediaPayload.videoMessage.caption || '';
-  } else if (mediaPayload.audioMessage || mediaPayload.voiceMessage) {
-   mediaType = 'audio';
-   mimetype = mediaPayload.audioMessage?.mimetype || mediaPayload.voiceMessage?.mimetype || 'audio/ogg; codecs=opus';
-   ptt = !!mediaPayload.voiceMessage;
-  } else if (mediaPayload.stickerMessage) {
-   mediaType = 'sticker';
-   mimetype = mediaPayload.stickerMessage.mimetype || 'image/webp';
-  } else if (mediaPayload.documentMessage) {
-   mediaType = 'document';
-   mimetype = mediaPayload.documentMessage.mimetype || 'application/octet-stream';
-   fileName = mediaPayload.documentMessage.fileName || 'file';
-   caption = mediaPayload.documentMessage.caption || '';
-  }
-
-  // 3. Prepare metadata object
-  const mediaMeta = {
-   type: mediaType,
-   mimetype,
-   caption,
-   fileName,
-   ptt,
-  };
-
-  // 4. Send the media
-  const quotedMsg = keepContext ? msg : null;
-  await sendMediaBuffer(s.sock, targetJid, buffer, mediaMeta, quotedMsg);
-  
- } catch (e) {
-  console.error('[WA] Error forwarding View Once:', e);
-  await say(s, targetJid, "❌ Error processing View Once media.");
- }
+ return false;
 }
 
 export const getText = (c) =>

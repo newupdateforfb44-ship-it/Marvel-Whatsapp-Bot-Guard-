@@ -44,12 +44,24 @@ export async function runLockdown(cid, s, on) {
   let closed = 0;
   if (s?.sock) {
     const me = [s.sock.user?.id, s.sock.user?.lid];
+    const priorModes = (cust.guard.lockdownGroupModes ||= {});
     for (const jid of protectedGroups(cust)) {
       try {
         const meta = await getMeta(s, jid);
         if (!isAdminOf(meta, me)) continue;
-        s.nightState?.set(jid, on ? 'announcement' : 'not_announcement');
-        await s.q.add(() => s.sock.groupSettingUpdate(jid, on ? 'announcement' : 'not_announcement'));
+        if (on && !Object.hasOwn(priorModes, jid)) {
+          priorModes[jid] = meta.announce ? 'announcement' : 'not_announcement';
+          save();
+        }
+        if (!on && !Object.hasOwn(priorModes, jid)) continue;
+        const setting = on ? 'announcement' : (priorModes[jid] || 'not_announcement');
+        const result = await s.q.add(() => s.sock.groupSettingUpdate(jid, setting));
+        if (result === null) continue;
+        if (!on) {
+          delete priorModes[jid];
+          save();
+        }
+        s.nightState?.set(jid, setting);
         closed++;
       } catch (e) {
         reportError(`lockdown ${cid}`, e);

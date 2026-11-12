@@ -19,7 +19,8 @@ async function useSqlAuthState(cid) {
     const [rows] = await pool.query('SELECT v FROM auth WHERE id = ?', [id(name)]);
     if (!rows.length) return null;
     const raw = openText(rows[0].v);
-    return raw === null ? null : JSON.parse(raw, BufferJSON.reviver);
+    if (raw === null) throw new Error(`Cannot decrypt existing WhatsApp auth record ${name} for ${cid}; check DATA_KEY before changing credentials.`);
+    return JSON.parse(raw, BufferJSON.reviver);
   };
   const remove = (name) => pool.query('DELETE FROM auth WHERE id = ?', [id(name)]);
 

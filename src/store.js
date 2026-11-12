@@ -29,6 +29,7 @@ export const db = {
   notes: {}, // 'cid|group' -> { notes: [], todos: [] } (Stage 5)
   utilDay: '', // day the lookup counters belong to (Stage 5)
   utilUse: {}, // 'cid|number' -> lookups today (Stage 5)
+  lastBackupDay: '', // last UTC day a backup was successfully delivered
 };
 
 // Older customers get the newer settings filled in with their defaults.
@@ -58,15 +59,20 @@ export function ensureShape(c) {
 
 export async function initStore() {
   let raw = {};
-  try {
-    if (sqlEnabled) {
-      const [rows] = await (await getPool()).query("SELECT v FROM kv WHERE k = 'db'");
-      raw = rows.length ? JSON.parse(rows[0].v) : {};
-    } else {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
+  if (sqlEnabled) {
+    const [rows] = await (await getPool()).query("SELECT v FROM kv WHERE k = 'db'");
+    raw = rows.length ? JSON.parse(rows[0].v) : {};
+  } else {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    try {
       raw = JSON.parse(fs.readFileSync(FILE, 'utf8'));
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
     }
-  } catch {}
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('Persisted database has an invalid top-level JSON value; refusing to initialize empty data.');
+  }
   const s = raw.settings || {};
   db.settings = {
     ...config.DEFAULT_GLOBAL,
@@ -95,41 +101,59 @@ export async function initStore() {
   db.notes = raw.notes && typeof raw.notes === 'object' ? raw.notes : {};
   db.utilDay = typeof raw.utilDay === 'string' ? raw.utilDay : '';
   db.utilUse = raw.utilUse && typeof raw.utilUse === 'object' ? raw.utilUse : {};
+  db.lastBackupDay = typeof raw.lastBackupDay === 'string' ? raw.lastBackupDay : '';
   console.log(`Storage: ${sqlEnabled ? 'MySQL' : 'local files'}`);
 }
 
 let timer = null;
 let dirty = false;
+let generation = 0;
 let chain = Promise.resolve();
-async function write() {
+async function write(snapshot) {
   if (sqlEnabled) {
     await (await getPool()).query(
       "INSERT INTO kv (k, v) VALUES ('db', ?) ON DUPLICATE KEY UPDATE v = VALUES(v)",
-      [JSON.stringify(db)]
+      [snapshot]
     );
   } else {
-    fs.writeFileSync(`${FILE}.tmp`, JSON.stringify(db));
+    fs.writeFileSync(`${FILE}.tmp`, snapshot);
     fs.renameSync(`${FILE}.tmp`, FILE);
   }
 }
 export function flush() {
+  if (timer) clearTimeout(timer);
   timer = null;
-  dirty = false;
-  chain = chain.then(write).catch((e) => console.error('Could not save data:', e.message));
+  if (!dirty) return chain;
+  const savedGeneration = generation;
+  const snapshot = JSON.stringify(db);
+  const task = chain.catch(() => {}).then(() => write(snapshot));
+  chain = task.then(
+    () => {
+      if (generation === savedGeneration) dirty = false;
+    },
+    (e) => {
+      dirty = true;
+      console.error('Could not save data:', e.message);
+      throw e;
+    }
+  );
   return chain;
 }
 export function save() {
-  if (!timer) timer = setTimeout(flush, 300);
+  markDirty();
+  if (timer) clearTimeout(timer);
+  timer = setTimeout(() => { void flush().catch(() => {}); }, 300);
 }
 
 // Counters change on every message: do not write the whole database each time. They are saved
 // by the autosave below (every 2 minutes, only if something changed) and when the bot stops.
 export const markDirty = () => {
   dirty = true;
+  generation++;
 };
 export function startAutosave() {
   setInterval(() => {
-    if (dirty) flush();
+    if (dirty) void flush().catch(() => {});
   }, 2 * 60 * 1000).unref();
 }
 

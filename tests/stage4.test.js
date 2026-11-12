@@ -140,6 +140,8 @@ test('ticket replies from Telegram go back to the same chat', async () => {
     assert.equal(await sendToChat('c1', PRIV, 'Thanks, we are on it.'), true);
     assert.equal(sent.at(-1).jid, PRIV);
     assert.equal(sent.at(-1).content.text, 'Thanks, we are on it.');
+    s.q.add = async () => null;
+    assert.equal(await sendToChat('c1', PRIV, 'This must report failure.'), false);
     social.rememberTicket('c1', 77, PRIV);
     assert.deepEqual(social.ticketFor('c1', 77), { cid: 'c1', jid: PRIV });
     assert.equal(social.ticketFor('c1', 78), null);

@@ -1,6 +1,6 @@
 // WhatsApp commands (group admins and the bot's own number). Prefix is set per customer.
 import { db, save } from './store.js';
-import { events, digits, getContext, getText, unwrap, getMeta, isAdminOf, findParticipant, say, react, notifyNotAdmin, strike } from './wa.js';
+import { events, digits, getContext, getText, unwrap, isViewOnce, getMeta, isAdminOf, findParticipant, say, react, notifyNotAdmin, strike } from './wa.js';
 import { runLockdown } from './lockdown.js';
 import { parsePoll, levelOf } from './social.js';
 import { contentFor, mediaOf } from './content.js';
@@ -276,12 +276,17 @@ const COMMANDS = {
     admin: true,
     run: (c) => {
       const p = pickTarget(c);
-      if (!p) return needTarget(c, 'unban');
-      const ids = idsOf(p);
+      const ctx = getContext(c.content);
+      const ref = ctx?.mentionedJid?.[0] || ctx?.participant || c.args.find((a) => digits(a).length >= 8 && digits(a).length <= 15);
+      const number = digits(ref);
+      const ids = p ? idsOf(p) : number.length >= 8 && number.length <= 15 ? [number] : [];
+      if (!ids.length) return needTarget(c, 'unban');
       const before = (c.g.blacklist || []).length;
       c.g.blacklist = (c.g.blacklist || []).filter((x) => !ids.includes(x));
       save();
-      return reply(c, before !== c.g.blacklist.length ? `✅ @${digits(p.id)} is off the blacklist.` : 'ℹ️ That member is not on the blacklist.', [p.id]);
+      const who = p ? digits(p.id) : number;
+      const mention = p?.id || `${number}@s.whatsapp.net`;
+      return reply(c, before !== c.g.blacklist.length ? `✅ @${who} is off the blacklist.` : 'ℹ️ That member is not on the blacklist.', [mention]);
     },
   },
 
@@ -618,7 +623,9 @@ const COMMANDS = {
     admin: true,
     run: async (c) => {
       const ctx = getContext(c.content);
-      const quoted = ctx?.quotedMessage ? unwrap(ctx.quotedMessage) : null;
+      const quotedRaw = ctx?.quotedMessage || null;
+      if (isViewOnce(quotedRaw)) return reply(c, '🎙 View-once voice messages cannot be downloaded or transcribed.');
+      const quoted = quotedRaw ? unwrap(quotedRaw) : null;
       if (!quoted?.audioMessage) return reply(c, `🎙 Reply to a voice note with ${c.prefix}transcribe.`);
       if (!c.g.aiOn) return reply(c, '🎙 The assistant is off. The owner can switch it on in the panel.');
       if (!aiReady()) return reply(c, '🎙 The owner has not set up the AI key yet.');

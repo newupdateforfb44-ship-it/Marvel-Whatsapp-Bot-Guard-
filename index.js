@@ -17,7 +17,7 @@ if (!config.ADMIN_IDS.length) {
 
 // Small web page so hosts like Render see an open port, and your uptime pinger has something to call.
 const PORT = process.env.PORT || 3000;
-http
+const server = http
   .createServer((req, res) => {
     // short links: /r/<code> counts a click and redirects
     if (String(req.url).startsWith('/r/')) return handleRedirect(req, res);
@@ -28,12 +28,12 @@ http
     if (handlePublicRoute(req, res, config.PUBLIC_STATS)) return;
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('ok');
-  })
-  .listen(PORT, () => console.log(`Health page on port ${PORT}`));
+  });
 
 const { initStore, flush, startAutosave, save } = await import('./src/store.js');
 await initStore();
 startAutosave();
+server.listen(PORT, () => console.log(`Health page on port ${PORT}`));
 
 // Forgot the admin PIN? Set RESET_ADMIN_PIN=true, redeploy once, then remove the variable.
 if (process.env.RESET_ADMIN_PIN === 'true' && db.settings.pin) {
@@ -55,16 +55,24 @@ process.on('uncaughtException', async (e) => {
   reportError('crash', e);
   crashes = crashes.filter((t) => Date.now() - t < 60000).concat(Date.now());
   if (crashes.length > 5) {
-    await flush();
+    await flush().catch((saveError) => console.error('Could not flush before crash exit:', saveError.message));
     process.exit(1);
   }
 });
 
 // Render sends SIGTERM on every deploy/restart: save first
+let shuttingDown = false;
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, async () => {
-    await flush();
-    process.exit(0);
+    if (shuttingDown) return;
+    shuttingDown = true;
+    try {
+      await flush();
+      process.exit(0);
+    } catch (e) {
+      console.error('Could not save data during shutdown:', e.message);
+      process.exit(1);
+    }
   });
 }
 
@@ -85,12 +93,17 @@ const { sendBackup } = await import('./src/backup.js');
 setInterval(() => runAllSites().catch((e) => reportError('uptime', e)), 60 * 1000);
 pruneStorage();
 setInterval(() => pruneStorage(), 60 * 60 * 1000);
-let lastBackupDay = '';
-setInterval(() => {
-  const n = new Date();
-  const day = n.toISOString().slice(0, 10);
-  if (n.getUTCHours() === 3 && lastBackupDay !== day) {
-    lastBackupDay = day;
-    sendBackup(bot.api).catch((e) => reportError('backup', e));
-  }
-}, 30 * 60 * 1000);
+let lastBackupAttemptAt = 0;
+async function runDailyBackup() {
+  const now = new Date();
+  const day = now.toISOString().slice(0, 10);
+  if (now.getUTCHours() < 3 || db.lastBackupDay === day || Date.now() - lastBackupAttemptAt < 60 * 60 * 1000) return;
+  lastBackupAttemptAt = Date.now();
+  const delivered = await sendBackup(bot.api);
+  if (!delivered) throw new Error('Daily backup could not be delivered to every configured owner.');
+  db.lastBackupDay = day;
+  save();
+}
+void runDailyBackup().catch((e) => reportError('backup', e));
+const backupTimer = setInterval(() => runDailyBackup().catch((e) => reportError('backup', e)), 5 * 60 * 1000);
+backupTimer.unref?.();

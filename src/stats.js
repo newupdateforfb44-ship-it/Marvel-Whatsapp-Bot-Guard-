@@ -1,7 +1,7 @@
 // Usage counters. Kept in memory and saved by the autosave (see store.js), never one database write per message.
 import { db, markDirty } from './store.js';
 
-const KEEP_DAYS = 30;
+const KEEP_DAYS = 90;
 
 export function bump(cid, key, jid) {
   const c = db.customers[cid];

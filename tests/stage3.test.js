@@ -321,6 +321,25 @@ test('lockdown: strict rules and closed groups, then the old rules come back', a
   assert.equal(g.slowMode, 0);
 });
 
+test('lockdown preserves a group that was already closed before lockdown', async () => {
+  const { s, calls } = setup();
+  db.customers.c1.groups[GROUP] = { name: '', first: 0, last: 0, msgs: 0 };
+  s.meta.set(GROUP, { m: { announce: true, participants: [{ id: at(BOT), admin: 'admin' }] }, t: Date.now() });
+  await runLockdown('c1', s, true);
+  await runLockdown('c1', s, false);
+  assert.deepEqual(calls.filter((c) => c[0] === 'setting').map((c) => c[2]), ['announcement', 'announcement']);
+  assert.equal(db.customers.c1.guard.lockdownGroupModes[GROUP], undefined, 'the snapshot is cleared after successful restore');
+});
+
+test('unlock does not open a group when no prior setting was captured', async () => {
+  const { s, calls } = setup();
+  db.customers.c1.groups[GROUP] = { name: '', first: 0, last: 0, msgs: 0 };
+  db.customers.c1.guard.lockdown = true;
+  db.customers.c1.guard.lockdownGroupModes = {};
+  await runLockdown('c1', s, false);
+  assert.equal(calls.some((c) => c[0] === 'setting'), false);
+});
+
 test('a failed post is queued, retried, and the customer is told after five tries', async () => {
   const { s, sock } = setup();
   sock.failing = true;

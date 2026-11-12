@@ -88,9 +88,19 @@ test('isPrivateIp and checkSite refuse private addresses', async () => {
   assert.equal(u.isPrivateIp('127.0.0.1'), true);
   assert.equal(u.isPrivateIp('10.1.2.3'), true);
   assert.equal(u.isPrivateIp('192.168.1.1'), true);
+  assert.equal(u.isPrivateIp('::ffff:127.0.0.1'), true);
+  assert.equal(u.isPrivateIp('::ffff:7f00:1'), true);
+  assert.equal(u.isPrivateIp('2001:4860:4860::8888'), false);
   assert.equal(u.isPrivateIp('8.8.8.8'), false);
   const r = await u.checkSite('127.0.0.1');
   assert.ok(r.error);
+  u._setSiteLookup(async () => [
+    { address: '93.184.216.34', family: 4 },
+    { address: '127.0.0.1', family: 4 },
+  ]);
+  assert.equal(await u.isPublicHost('rebind.test'), false, 'a host with any private DNS answer is rejected');
+  assert.match((await u.checkSite('https://rebind.test')).error, /public websites/);
+  u._setSiteLookup(null);
 });
 
 test('checkSite with allowPrivate reads a local server (status and timing)', async () => {

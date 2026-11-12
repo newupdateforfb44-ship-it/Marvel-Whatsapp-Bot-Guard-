@@ -11,12 +11,12 @@ process.env.ADMIN_IDS = '1';
 process.env.DATA_KEY = 'test-data-key-123';
 process.chdir(fs.mkdtempSync(path.join(os.tmpdir(), 'stage7-')));
 
-const { initStore, db } = await import('../src/store.js');
+const { initStore, db, markDirty, flush } = await import('../src/store.js');
 await initStore();
 const { sealText, openText, encryptionOn } = await import('../src/crypto.js');
 const uptime = await import('../src/uptime.js');
 const { pruneStorage } = await import('../src/cleanup.js');
-const { makeBackup, restoreBackup } = await import('../src/backup.js');
+const { makeBackup, restoreBackup, sendBackup } = await import('../src/backup.js');
 const { handleHook, newHookToken } = await import('../src/webhook.js');
 const { events } = await import('../src/wa.js');
 
@@ -183,4 +183,79 @@ test('order webhook: a body over 4 KB is refused', () => {
   req.emit('data', Buffer.alloc(5000, 97));
   req.emit('end');
   assert.equal(res.status, 413);
+});
+
+test('backup delivery reports failures instead of marking them successful', async () => {
+  assert.equal(await sendBackup({ sendDocument: async () => { throw new Error('Telegram unavailable'); }, sendMessage: async () => {} }), false);
+  assert.equal(await sendBackup({ sendDocument: async () => {}, sendMessage: async () => {} }), true);
+});
+
+test('resume restores suspended state and reason if session startup fails', async () => {
+  const { resume, _setStartSessionForTest } = await import('../src/subs.js');
+  const requiresSubscription = db.settings.requireSubscription;
+  db.settings.requireSubscription = true;
+  const c = { id: 'resume-failure', status: 'suspended', suspendReason: 'manual review', expiresAt: Date.now() + DAY };
+  let resumed = false;
+  const onResumed = () => { resumed = true; };
+  events.on('resumed', onResumed);
+  _setStartSessionForTest(async () => { throw new Error('connection setup failed'); });
+  try {
+    assert.equal(await resume(c), false);
+    assert.equal(c.status, 'suspended');
+    assert.equal(c.suspendReason, 'manual review');
+    assert.equal(resumed, false);
+  } finally {
+    _setStartSessionForTest(null);
+    events.off('resumed', onResumed);
+    db.settings.requireSubscription = requiresSubscription;
+  }
+});
+
+test('store refuses corrupt persisted JSON without overwriting it', async () => {
+  await flush();
+  const original = process.cwd();
+  const isolated = fs.mkdtempSync(path.join(os.tmpdir(), 'store-corrupt-'));
+  process.chdir(isolated);
+  fs.mkdirSync('data', { recursive: true });
+  fs.writeFileSync('data/db.json', '{broken');
+  try {
+    await assert.rejects(initStore());
+    assert.equal(fs.readFileSync('data/db.json', 'utf8'), '{broken');
+  } finally {
+    process.chdir(original);
+  }
+});
+
+test('store retries a failed write and persists the dirty snapshot', async () => {
+  const original = process.cwd();
+  const isolated = fs.mkdtempSync(path.join(os.tmpdir(), 'store-retry-'));
+  process.chdir(isolated);
+  fs.mkdirSync('data', { recursive: true });
+  fs.mkdirSync('data/db.json.tmp');
+  db.lastBackupDay = '2026-11-12';
+  markDirty();
+  try {
+    await assert.rejects(flush());
+    fs.rmSync('data/db.json.tmp', { recursive: true });
+    await flush();
+    const persisted = JSON.parse(fs.readFileSync('data/db.json', 'utf8'));
+    assert.equal(persisted.lastBackupDay, '2026-11-12');
+  } finally {
+    process.chdir(original);
+  }
+});
+
+test('daily stats retain a rolling 90-day window', async () => {
+  const { bump } = await import('../src/stats.js');
+  const today = new Date().toISOString().slice(0, 10);
+  db.daily = { '2000-01-01': {} };
+  for (let i = 1; i <= 90; i++) {
+    const day = new Date(Date.now() - i * DAY).toISOString().slice(0, 10);
+    db.daily[day] = {};
+  }
+  db.customers['stats-retention'] = { stats: { msgs: 0 } };
+  bump('stats-retention', 'msgs');
+  assert.equal(Object.keys(db.daily).length, 90);
+  assert.ok(db.daily[today]);
+  assert.equal(db.daily['2000-01-01'], undefined);
 });

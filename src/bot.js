@@ -3,7 +3,7 @@ import { InlineKeyboard, Keyboard } from 'grammy';
 import config from '../config.js';
 import { db, save, usedSlots, ensureCustomer, addLog } from './store.js';
 import { startSession, stopSession, events, joinByLink, lockdownFromPanel, sessionHealth, sendToChat } from './guard.js';
-import { groupScore, hourIn } from './checks.js';
+import { accountHealth, groupScore, hourIn } from './checks.js';
 import { ticketFor, rememberTicket, splitBar, normTime, localParts, parseReplyRule } from './social.js';
 import { linksOf, shortUrl } from './utility.js';
 import { listMedia, saveMedia, deleteMedia, validName, MAX_VOICE, MAX_STICKER } from './content.js';
@@ -441,7 +441,7 @@ async function showSafety(ctx, note = '') {
   const c = ensureCustomer(ctx.from);
   if (c.status !== 'connected') return showHome(ctx);
   const g = c.guard;
-  const h = sessionHealth(c.id);
+  const h = accountHealth(sessionHealth(c.id) || {});
   const kb = new InlineKeyboard()
     .text(g.lockdown ? '🔓 End lockdown' : '🚨 Lockdown now', g.lockdown ? 'lock:off' : 'lock:on')
     .row()
@@ -1204,6 +1204,16 @@ bot.on('message:text', async (ctx) => {
   if (!st || text.startsWith('/')) {
     waiting.delete(uid);
     return showHome(ctx); // any message shows the menu with buttons
+  }
+
+  const customerInputTypes = ['medname', 'medfile', 'words', 'allow', 'field', 'item', 'list', 'grouplink'];
+  const c = customerInputTypes.includes(st.type) || st.type === 'number' ? ensureCustomer(ctx.from) : null;
+  const staleCustomerInput = c && (st.type === 'number'
+    ? ['connected', 'suspended', 'expired', 'banned'].includes(c.status)
+    : c.status !== 'connected');
+  if (staleCustomerInput) {
+    waiting.delete(uid);
+    return showHome(ctx);
   }
 
   if (st.type === 'medname') {

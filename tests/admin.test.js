@@ -12,7 +12,8 @@ process.chdir(fs.mkdtempSync(path.join(os.tmpdir(), 'admin-')));
 const { initStore, db } = await import('../src/store.js');
 await initStore();
 const plans = await import('../src/plans.js');
-const { subscriptionTick, resume } = await import('../src/subs.js');
+const { subscriptionTick, resume, _setStartSessionForTest } = await import('../src/subs.js');
+_setStartSessionForTest(async () => ({}));
 const { handle } = await import('../src/guard.js');
 const { SendQueue } = await import('../src/queue.js');
 const { FloodTracker } = await import('../src/rules.js');
@@ -388,6 +389,7 @@ test('broadcast audiences + sending to selected customers', async () => {
 // ---------- staff management ----------
 test('owner adds and removes staff; staff get the admin panel', async () => {
   tg.length = 0;
+  db.settings.staff = [];
   await click(1, 'a:staff:add');
   await type(1, '555123');
   assert.deepEqual(db.settings.staff, ['555123']);

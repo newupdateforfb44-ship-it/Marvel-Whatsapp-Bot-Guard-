@@ -2,6 +2,8 @@
 // Lookups call public web services. Each one fails quietly when the service is down or no key is set.
 import crypto from 'crypto';
 import dns from 'dns/promises';
+import httpRequest from 'http';
+import httpsRequest from 'https';
 import net from 'net';
 import tls from 'tls';
 import config from '../config.js';
@@ -232,25 +234,104 @@ export function handleRedirect(req, res) {
 export const linksOf = (cid) => Object.entries(db.shorts).filter(([, e]) => e.cid === String(cid));
 
 // ---------- site checker (public websites only: blocks private and local addresses) ----------
-export function isPrivateIp(ip) {
-  if (net.isIPv6(ip)) return ip === '::1' || ip === '::' || /^f[cd]/i.test(ip) || /^fe80/i.test(ip);
-  const p = ip.split('.').map(Number);
-  return p[0] === 10 || p[0] === 127 || p[0] === 0 || (p[0] === 172 && p[1] >= 16 && p[1] <= 31) || (p[0] === 192 && p[1] === 168) || (p[0] === 169 && p[1] === 254) || p[0] >= 224;
+const blocked4 = new net.BlockList();
+for (const [subnet, bits] of [
+  ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
+  ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24],
+  ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24],
+  ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4],
+]) blocked4.addSubnet(subnet, bits, 'ipv4');
+const global6 = new net.BlockList();
+global6.addSubnet('2000::', 3, 'ipv6');
+const blocked6 = new net.BlockList();
+for (const [subnet, bits] of [
+  ['::', 128], ['::1', 128], ['::ffff:0:0', 96], ['64:ff9b::', 96], ['100::', 64],
+  ['2001::', 23], ['2001:db8::', 32], ['2002::', 16], ['3fff::', 20],
+  ['fc00::', 7], ['fe80::', 10], ['ff00::', 8],
+]) blocked6.addSubnet(subnet, bits, 'ipv6');
+
+function ipv6Words(ip) {
+  let value = String(ip).toLowerCase().split('%')[0];
+  if (value.includes('.')) {
+    const i = value.lastIndexOf(':');
+    const octets = value.slice(i + 1).split('.').map(Number);
+    if (octets.length !== 4 || octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+    value = `${value.slice(0, i)}:${((octets[0] << 8) | octets[1]).toString(16)}:${((octets[2] << 8) | octets[3]).toString(16)}`;
+  }
+  const [leftText, rightText = ''] = value.split('::');
+  const left = leftText ? leftText.split(':') : [];
+  const right = rightText ? rightText.split(':') : [];
+  const missing = 8 - left.length - right.length;
+  if (value.includes('::') ? missing < 1 : missing !== 0) return null;
+  const words = [...left, ...Array(missing).fill('0'), ...right].map((x) => parseInt(x || '0', 16));
+  return words.length === 8 && words.every((n) => Number.isInteger(n) && n >= 0 && n <= 0xffff) ? words : null;
 }
-export async function isPublicHost(host) {
+
+function mappedIpv4(ip) {
+  const words = ipv6Words(ip);
+  if (!words || words.slice(0, 5).some((n) => n !== 0) || words[5] !== 0xffff) return null;
+  return [words[6] >> 8, words[6] & 255, words[7] >> 8, words[7] & 255].join('.');
+}
+
+export function isPrivateIp(ip) {
+  const value = String(ip || '').replace(/^\[|\]$/g, '');
+  const family = net.isIP(value);
+  if (family === 4) return blocked4.check(value, 'ipv4');
+  if (family !== 6) return true;
+  const mapped = mappedIpv4(value);
+  if (mapped) return isPrivateIp(mapped);
+  return !global6.check(value, 'ipv6') || blocked6.check(value, 'ipv6');
+}
+
+let siteLookup = dns.lookup;
+export const _setSiteLookup = (fn) => { siteLookup = fn || dns.lookup; };
+
+async function resolveSiteHost(host) {
   const h = String(host || '').toLowerCase().replace(/^\[|\]$/g, '');
-  if (!h || h === 'localhost' || h.endsWith('.local') || h.endsWith('.internal')) return false;
-  if (net.isIP(h)) return !isPrivateIp(h);
+  if (!h || h === 'localhost' || h.endsWith('.local') || h.endsWith('.internal')) return [];
+  const family = net.isIP(h);
+  if (family) return [{ address: h, family }];
+  return siteLookup(h, { all: true, verbatim: true });
+}
+
+export async function isPublicHost(host) {
   try {
-    const addrs = await dns.lookup(h, { all: true });
+    const addrs = await resolveSiteHost(host);
     return addrs.length > 0 && addrs.every((a) => !isPrivateIp(a.address));
   } catch {
     return false;
   }
 }
-async function certDaysLeft(host) {
+
+async function requestAtAddress(u, address, timeoutMs = 10000) {
+  const hostname = u.hostname.replace(/^\[|\]$/g, '');
+  const transport = u.protocol === 'https:' ? httpsRequest : httpRequest;
+  return new Promise((resolve, reject) => {
+    const req = transport.request({
+      protocol: u.protocol,
+      hostname: address.address,
+      port: Number(u.port) || (u.protocol === 'https:' ? 443 : 80),
+      path: `${u.pathname}${u.search}`,
+      method: 'GET',
+      headers: { host: u.host, 'user-agent': 'GroupGuardBot/2.5' },
+      ...(u.protocol === 'https:' && !net.isIP(hostname) ? { servername: hostname } : {}),
+    }, (res) => {
+      const status = res.statusCode;
+      res.resume();
+      resolve({ status });
+    });
+    const hardTimer = setTimeout(() => req.destroy(new Error('request timed out')), timeoutMs);
+    req.on('close', () => clearTimeout(hardTimer));
+    req.setTimeout(timeoutMs, () => req.destroy(new Error('request timed out')));
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+async function certDaysLeft(host, address, port = 443) {
+  const hostname = String(host).replace(/^\[|\]$/g, '');
   return new Promise((resolve) => {
-    const sock = tls.connect({ host, port: 443, servername: host, rejectUnauthorized: false }, () => {
+    const sock = tls.connect({ host: address.address, port, ...(net.isIP(hostname) ? {} : { servername: hostname }), rejectUnauthorized: false }, () => {
       const c = sock.getPeerCertificate();
       sock.end();
       resolve(c?.valid_to ? Math.floor((new Date(c.valid_to) - Date.now()) / 86400000) : null);
@@ -269,17 +350,24 @@ export async function checkSite(input, { allowPrivate = false } = {}) {
   } catch {
     return { error: 'That does not look like a web address.' };
   }
-  if (!allowPrivate && !(await isPublicHost(u.hostname))) return { error: 'I can only check public websites.' };
+  const hostname = u.hostname.replace(/^\[|\]$/g, '');
+  let addresses;
+  try {
+    addresses = await resolveSiteHost(hostname);
+  } catch {
+    addresses = [];
+  }
+  if (!addresses.length || (!allowPrivate && addresses.some((a) => isPrivateIp(a.address)))) return { error: 'I can only check public websites.' };
   const t0 = Date.now();
   let status;
   try {
-    const r = await http(u.href, { redirect: 'manual', signal: AbortSignal.timeout(10000) });
+    const r = await requestAtAddress(u, addresses[0]);
     status = r.status;
   } catch {
     return { error: `${u.hostname} did not answer.` };
   }
   const ms = Date.now() - t0;
-  const ssl = u.protocol === 'https:' ? await certDaysLeft(u.hostname) : null;
+  const ssl = u.protocol === 'https:' ? await certDaysLeft(hostname, addresses[0], Number(u.port) || 443) : null;
   return { host: u.hostname, status, ms, ssl };
 }
 export const siteLine = (r) =>

@@ -171,14 +171,34 @@ test('warn / warnings / resetwarn', async () => {
  assert.equal(db.warnings[`c1|${GROUP}|${MEMBER}`], undefined);
 });
 
-test('view-once image triggering the media rule is deleted and warned, but not forwarded', async () => {
- const fixture = setup({ guard: { blockMedia: { image: true } } });
+test('unban can remove a blacklisted number even when the member is no longer present', async () => {
+ const { s, sent } = setup();
+ const number = '2348012345678';
+ db.customers.c1.guard.blacklist = [number];
+ await handle('c1', s, msg(ADMIN, text(`.unban ${number}`)));
+ assert.deepEqual(db.customers.c1.guard.blacklist, []);
+ assert.match(sent.at(-1).text, /is off the blacklist/);
+});
+
+test('transcribe refuses quoted view-once audio before media download', async () => {
+ const { s, sent } = setup();
+ const quoted = { viewOnceMessage: { message: { audioMessage: { mimetype: 'audio/ogg' } } } };
+ const command = msg(ADMIN, { extendedTextMessage: { text: '.transcribe', contextInfo: { stanzaId: 'Q1', participant: `${MEMBER}@s.whatsapp.net`, quotedMessage: quoted } } });
+ await handle('c1', s, command);
+ assert.match(sent.at(-1).text, /cannot be downloaded or transcribed/);
+});
+
+test('view-once messages are left untouched and never downloaded or forwarded', async () => {
+ const fixture = setup({ guard: { blockMedia: { image: true }, forwardViewOn: true, adminLogJid: '888@s.whatsapp.net' } });
  const { s, sent } = fixture;
  await handle('c1', s, msg(MEMBER, { viewOnceMessage: { message: { imageMessage: { caption: 'private' } } } }));
+ const privateMsg = { key: { remoteJid: `${MEMBER}@s.whatsapp.net`, participant: `${MEMBER}@s.whatsapp.net`, id: 'PRIVATE', fromMe: false }, message: { viewOnceMessageV2: { message: { imageMessage: { caption: 'private' } } } } };
+ await handle('c1', s, privateMsg);
  assert.equal(fixture.mediaDownloads, 0);
  assert.equal(sent.some((content) => content.imageMessage?.image), false);
- assert.equal(deleted(sent).length, 1);
- assert.match(sent.at(-1).text, /posting images is not allowed here/);
+ assert.equal(deleted(sent).length, 0);
+ assert.equal(sent.length, 0);
+ assert.equal(db.warnings[`c1|${GROUP}|${MEMBER}`], undefined);
 });
 
 test('a failed removal preserves the warning count for a later retry', async () => {

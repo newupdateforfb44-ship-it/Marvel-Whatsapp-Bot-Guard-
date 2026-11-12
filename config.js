@@ -13,6 +13,8 @@ export default {
   MYSQL_URL: process.env.MYSQL_URL || '',
   // Most online MySQL hosts require a secure connection. Set MYSQL_SSL=false only if yours does not.
   MYSQL_SSL: process.env.MYSQL_SSL !== 'false',
+  // Optional PEM-encoded CA certificate for database providers using a private CA.
+  MYSQL_CA: process.env.MYSQL_CA || '',
 
   // Public address of this service, used for short links (example: https://your-app.onrender.com)
   PUBLIC_URL: process.env.PUBLIC_URL || '',

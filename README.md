@@ -9,6 +9,8 @@ A Telegram bot where customers connect their own WhatsApp number. The guard then
    - `BOT_TOKEN`
    - `ADMIN_IDS` (comma separated)
    - `ADMIN_CONTACT_URL` (for example https://t.me/your_username)
+   - `MYSQL_URL` (optional; use a persistent MySQL database instead of local files)
+   - `MYSQL_CA` (optional PEM certificate for MySQL providers with a private CA; TLS certificate checks are enabled by default)
 4. `npm install` then `npm start`.
 
 ## What is new in 2.9 (Stage 9: business and growth)
@@ -22,7 +24,7 @@ Not included: resellers, the beta club, and a plugin system.
 ## What is new in 2.8 (Stage 8: AI and safety)
 - **Setup (host environment)**: `AI_API_KEY`, and optionally `AI_BASE_URL` (default https://api.openai.com/v1), `AI_MODEL` and `AI_STT_MODEL` (the speech-to-text model). Any service with the OpenAI-style API works. Without a key the AI is off.
 - **Assistant**: members type `.ai your question` once it is switched on in **Settings > AI & safety**. Pick a personality there: friendly, formal, fun or teacher. Answers follow the language of the question.
-- **Transcripts**: an admin replies to a voice note with `.transcribe` to get the text and a short summary. The voice note is sent to your AI service.
+- **Transcripts**: an admin replies to a voice note with `.transcribe` to get the text and a short summary. The voice note is sent to your AI service. View-once voice messages are not downloaded or transcribed.
 - **Daily limit**: AI calls per customer per day (10, 20, 50, or no limit). Default 20.
 - **Scam scanner**: in the same panel, delete messages with suspicious links. It checks for short links, IP addresses, look-alike letters, hidden logins, risky domain endings and scam wording next to a link. No outside lookups are made.
 - **Signature**: set a line such as "Powered by Marvel" under Settings > Messages & links. It is added to the menu, the first greeting and AI answers.

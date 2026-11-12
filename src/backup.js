@@ -33,9 +33,14 @@ export function restoreBackup(text) {
 // Sends the backup to every owner. Used by the daily job and the Backup button.
 export async function sendBackup(api) {
   const r = makeBackup();
+  let delivered = config.ADMIN_IDS.length > 0 && !r.error;
   for (const id of config.ADMIN_IDS) {
-    if (r.error) await api.sendMessage(id, `⚠️ ${r.error}`).catch(() => {});
-    else await api.sendDocument(id, new InputFile(r.buf, r.name), { caption: '💾 Backup of Group Guard. Keep it private.' }).catch(() => {});
+    try {
+      if (r.error) await api.sendMessage(id, `⚠️ ${r.error}`);
+      else await api.sendDocument(id, new InputFile(r.buf, r.name), { caption: '💾 Backup of Group Guard. Keep it private.' });
+    } catch {
+      delivered = false;
+    }
   }
-  return !r.error;
+  return delivered;
 }

@@ -5,6 +5,9 @@ import { stopSession, startSession } from './guard.js';
 import { reportError } from './alerts.js';
 import { DAY, subActive, isLifetime, mayUse } from './plans.js';
 
+let startSessionForResume = startSession;
+export const _setStartSessionForTest = (fn) => { startSessionForResume = fn || startSession; };
+
 // Runs every 10 minutes (and once at start). Does nothing while "require subscription" is OFF.
 export async function subscriptionTick(now = Date.now()) {
   if (!db.settings.requireSubscription) return;
@@ -42,13 +45,20 @@ export async function resume(c) {
     save();
     return false;
   }
-  c.status = 'connected';
-  c.suspendReason = '';
-  save();
+  const previousStatus = c.status;
+  const previousReason = c.suspendReason;
   try {
-    await startSession(c.id);
+    c.status = 'connected';
+    c.suspendReason = '';
+    save();
+    await startSessionForResume(c.id);
   } catch (e) {
+    await stopSession(c.id).catch(() => {});
+    c.status = previousStatus;
+    c.suspendReason = previousReason;
+    save();
     reportError(`resume ${c.id}`, e);
+    return false;
   }
   events.emit('resumed', c.id);
   return true;

@@ -74,7 +74,7 @@ export async function statusAudience(s, cust) {
   }
   return [...ids].slice(0, 300);
 }
-// Tagging inside a status is kept small on purpose: at most 5 people, and only people who are
+// Tagging inside a status is capped at 50 people, and only people who are
 // members of the customer's protected groups (the status audience). Anyone else is skipped.
 export const MAX_STATUS_TAGS = 50;
 export function pickStatusTags(wanted, audience) {

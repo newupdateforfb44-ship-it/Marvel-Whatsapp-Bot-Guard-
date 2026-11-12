@@ -246,6 +246,7 @@ function askReason(ctx, kind, c) {
 
 async function applyReason(ctx, kind, c, reason) {
   reason = reason.slice(0, 200);
+  waiting.delete(String(c.id));
   if (kind === 'ban') {
     await stopSession(c.id, { wipe: true, logout: true });
     c.status = 'banned';
