@@ -753,3 +753,12 @@ export async function lockdownFromPanel(cid, lock) {
     
     return { success: true, locked: s.locked };
 }
+
+export async function sendToChat(sock, jid, text) {
+    try {
+        await sock.sendMessage(jid, { text });
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
