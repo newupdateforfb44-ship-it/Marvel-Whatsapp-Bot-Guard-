@@ -701,74 +701,74 @@ export async function startAllSessions() {
 startAllSessions();
 
 // Add this function to guard.js
-export function sessionInfo(cid) {
-    const s = sessions.get(String(cid));
-    if (!s) return null;
-    
-    return {
-        cid: String(cid),
-        state: s.state,
-        startedAt: s.startedAt,
-        openedAt: s.openedAt,
-        reconnects: s.reconnects || 0,
-        pairNumber: s.pairNumber,
-        pairRequested: s.pairRequested,
-        stopped: s.stopped,
-        lastMsgAt: s.lastMsgAt,
-        drops: s.drops?.length || 0,
-        retryCount: s.retry?.length || 0,
-    };
+export function sessionHealth(cid) {
+ const s = sessions.get(String(cid));
+ if (!s) return null;
+ 
+ return {
+ cid: String(cid),
+ state: s.state,
+ startedAt: s.startedAt,
+ openedAt: s.openedAt,
+ reconnects: s.reconnects || 0,
+ pairNumber: s.pairNumber,
+ pairRequested: s.pairRequested,
+ stopped: s.stopped,
+ lastMsgAt: s.lastMsgAt,
+ drops: s.drops?.length || 0,
+ retryCount: s.retry?.length || 0,
+ };
 }
 
 export async function restartAll() {
-    const cids = [...sessions.keys()];
-    const results = [];
-    for (const cid of cids) {
-        try {
-            await restartSession(cid);
-            results.push({ cid, status: 'restarted' });
-        } catch (e) {
-            results.push({ cid, status: 'error', error: e.message });
-        }
-    }
-    return results;
+ const cids = [...sessions.keys()];
+ const results = [];
+ for (const cid of cids) {
+ try {
+ await restartSession(cid);
+ results.push({ cid, status: 'restarted' });
+ } catch (e) {
+ results.push({ cid, status: 'error', error: e.message });
+ }
+ }
+ return results;
 }
 
 export async function joinByLink(sock, link) {
-    try {
-        const code = await sock.groupAcceptInvite(link);
-        return { success: true, code };
-    } catch (e) {
-        return { success: false, error: e.message };
-    }
+ try {
+ const code = await sock.groupAcceptInvite(link);
+ return { success: true, code };
+ } catch (e) {
+ return { success: false, error: e.message };
+ }
 }
 
 export async function lockdownFromPanel(cid, lock) {
-    const s = sessions.get(String(cid));
-    if (!s) return { success: false, error: 'Session not found' };
-    
-    s.locked = !!lock;
-    // Optional: Send a message to the user or log it
-    console.log(`[Guard] Session ${cid} ${lock ? 'locked' : 'unlocked'} via panel`);
-    
-    return { success: true, locked: s.locked };
+ const s = sessions.get(String(cid));
+ if (!s) return { success: false, error: 'Session not found' };
+ 
+ s.locked = !!lock;
+ // Optional: Send a message to the user or log it
+ console.log(`[Guard] Session ${cid} ${lock ? 'locked' : 'unlocked'} via panel`);
+ 
+ return { success: true, locked: s.locked };
 }
 
 export async function sendToChat(sock, jid, text) {
-    try {
-        await sock.sendMessage(jid, { text });
-        return { success: true };
-    } catch (e) {
-        return { success: false, error: e.message };
-    }
+ try {
+ await sock.sendMessage(jid, { text });
+ return { success: true };
+ } catch (e) {
+ return { success: false, error: e.message };
+ }
 }
 
 export { 
-    startSession, 
-    stopSession, 
-    events, 
-    joinByLink, 
-    lockdownFromPanel, 
-    sessionHealth, // <-- Make sure this function is defined and exported here
-    sendToChat 
+ startSession, 
+ stopSession, 
+ events, 
+ joinByLink, 
+ lockdownFromPanel, 
+ sessionHealth, 
+ sendToChat 
 };
