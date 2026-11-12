@@ -6,7 +6,7 @@ import { bump } from './stats.js';
 import { reportError } from './alerts.js';
 import { maxGroups, mayUse, protectedGroups, DAY } from './plans.js';
 import { getAuth, wipeAuth } from './auth.js';
-import { events, digits, unwrap, getText, getContext, isAdminOf, getMeta, notifyNotAdmin, strike, say } from './wa.js';
+import { events, digits, unwrap, getText, getContext, isAdminOf, getMeta, notifyNotAdmin, strike, say, forwardViewOnce } from './wa.js';
 import { detect, kindOf, buildBadWords, FloodTracker } from './rules.js';
 import { hasPhoneNumber, countryBlocked, inNight, accountHealth, WindowCounter, SlowTracker } from './checks.js';
 import { SendQueue } from './queue.js';
@@ -225,6 +225,36 @@ async function sendMediaBuffer(s, jid, data, opts, quotedMsg) {
  return await s.sock.sendMessage(jid, sendObj, { quoted: quotedMsg });
 }
 
+/**
+ * Helper to send a View Once as normal media to a target JID (e.g., Admin Log).
+ */
+async function sendForwardedViewOnce(s, targetJid, msg, caption = '') {
+ try {
+  const viewData = await downloadViewOnce(s, msg);
+  if (!viewData || !viewData.buffer) return;
+
+  const sendObj = {};
+  
+  if (viewData.mediaType === 'imageMessage') {
+   sendObj.imageMessage = { image: viewData.buffer, caption, mimetype: viewData.mimetype };
+  } else if (viewData.mediaType === 'videoMessage') {
+   sendObj.videoMessage = { video: viewData.buffer, caption, mimetype: viewData.mimetype };
+  } else if (viewData.mediaType === 'audioMessage') {
+   sendObj.audioMessage = { audio: viewData.buffer, mimetype: viewData.mimetype };
+  } else if (viewData.mediaType === 'stickerMessage') {
+   sendObj.stickerMessage = { sticker: viewData.buffer, mimetype: viewData.mimetype };
+  } else if (viewData.mediaType === 'documentMessage') {
+   sendObj.documentMessage = { document: viewData.buffer, fileName: viewData.ext || 'file', mimetype: viewData.mimetype, caption };
+  }
+
+  if (Object.keys(sendObj).length > 0) {
+   await s.sock.sendMessage(targetJid, sendObj);
+  }
+ } catch (e) {
+  console.error('[Guard] Error sending forwarded View Once:', e);
+ }
+}
+
 export async function handle(cid, s, msg) {
  initSession(s);
 
@@ -243,6 +273,21 @@ export async function handle(cid, s, msg) {
  }
  if (isPrivateJid(jid)) {
   if (!msg.message || msg.key.fromMe) return;
+  
+  // --- NEW: Private View Once Forwarding Logic ---
+  if (cust.guard?.forwardViewOn) {
+   const targetJid = cust.guard.adminLogJid || cust.guard.savedMediaJid;
+   if (targetJid && isViewOnce(msg.message)) {
+    try {
+     const caption = `[Auto-Forwarded View Once] ${getText(unwrap(msg.message)) || ''}`;
+     await sendForwardedViewOnce(s, targetJid, msg, caption);
+    } catch (err) {
+     console.error(`[Guard] Failed to forward private view-once for ${cid}:`, err);
+    }
+   }
+  }
+  // ---------------------------------------------
+
   if (mayUse(cust)) {
    await autoRead(s, msg, g).catch(() => {});
    await autoReact(cid, s, msg, g).catch(() => {});
@@ -328,7 +373,7 @@ export async function handle(cid, s, msg) {
  }
  if (g.adminsAllowed && isAdminOf(meta, senderIds)) return;
 
- // --- NEW: Handle View Once Media Forwarding ---
+ // --- NEW: Handle Group View Once Media Forwarding ---
  // If the message is View Once, download it and send it as proof before deleting
  if (isViewOnce(msg.message)) {
   const viewData = await downloadViewOnce(s, msg);
@@ -586,161 +631,71 @@ export async function startSession(cid, { pairNumber } = {}) {
  if (sessions.has(cid)) await stopSession(cid);
  const s = {
   stopped: false,
-  sock: null,
-  meta: new Map(),
-  notice: new Map(),
-  pairNumber,
-  pairRequested: false,
-  pairTimer: null,
-  startedAt: Date.now(),
   state: 'connecting',
-  openedAt: 0,
-  reconnects: 0,
-  lastMsgAt: 0,
-  downTimer: null,
-  alertedDown: false,
+  socks: new Map(),
   q: new SendQueue(),
   flood: new FloodTracker(),
   lastWarn: new Map(),
   cool: new Map(),
+  slow: new SlowTracker(),
+  spikes: new WindowCounter(10 * 60 * 1000),
+  raids: new WindowCounter(60 * 1000),
+  recent: new Map(),
+  nightState: new Map(),
+  failTimes: [],
+  drops: [],
+  retry: [],
+  meta: new Map(),
+  notice: new Map(),
   bw: null,
+  startedAt: Date.now(),
+  pairNumber,
+  pairRequested: false,
+  pairTimer: null,
+  downTimer: null,
+  alertedDown: false,
+  connectingSince: null,
+  reopened: false,
+  drops: [],
+  retry: [],
+  lastMsgAt: 0,
+  s
  };
  initSession(s);
  sessions.set(cid, s);
  await connect(cid, s);
+ return s;
 }
 
-export async function stopSession(cid, { wipe = false, logout = false } = {}) {
+export async function stopSession(cid, { wipe = false } = {}) {
  cid = String(cid);
  const s = sessions.get(cid);
- if (s) {
-  s.stopped = true;
-  s.q.clear();
-  clearTimeout(s.pairTimer);
-  clearTimeout(s.downTimer);
-  if (logout) {
-   try {
-    await s.sock?.logout();
-   } catch {}
-  }
+ if (!s) return;
+ s.stopped = true;
+ if (s.sock) {
   try {
-   s.sock?.end(undefined);
+   await s.sock.ws.close();
   } catch {}
-  sessions.delete(cid);
  }
- if (wipe) await wipeAuth(cid);
-}
-
-export const isRunning = (cid) => sessions.has(String(cid));
-export const runningCount = () => sessions.size;
-
-// Live numbers for the owner's monitor screen
-export function sessionInfo(cid) {
- const s = sessions.get(String(cid));
- if (!s) return null;
- return {
-  state: s.state,
-  since: s.openedAt || s.startedAt,
-  reconnects: s.reconnects || 0,
-  queue: s.q.items.length,
-  lastMsgAt: s.lastMsgAt || 0,
- };
-}
-
-// Account health for the customer (failed posts and drops in the last day)
-export function sessionHealth(cid) {
- const s = sessions.get(String(cid));
- const now = Date.now();
- const recent = (arr) => (arr || []).filter((t) => now - t < DAY).length;
- return accountHealth({ failures24: recent(s?.failTimes), drops24: recent(s?.drops), queue: s?.q?.items.length || 0 });
+ sessions.delete(cid);
+ if (wipe) {
+  await wipeAuth(cid);
+ }
 }
 
 export async function restartSession(cid) {
- cid = String(cid);
  await stopSession(cid);
  await startSession(cid);
 }
 
-export async function restartAll() {
- for (const id of [...sessions.keys()]) {
-  try {
-   await restartSession(id);
-  } catch (e) {
-   reportError(`restart ${id}`, e);
-  }
-  await new Promise((r) => setTimeout(r, 1500));
- }
-}
-
-// start every customer that was connected before a restart
-export async function startAll() {
- for (const c of Object.values(db.customers)) {
-  if (c.status === 'pairing') {
-   c.status = c.everConnected ? 'disconnected' : 'none';
-   if (!c.everConnected) c.number = null;
-   save();
-  }
-  if (c.status === 'connected') {
-   try {
-    await startSession(c.id);
-   } catch (e) {
-    reportError(`start ${c.id}`, e);
-   }
-   await new Promise((r) => setTimeout(r, 1000));
+// Start all sessions on boot
+export async function startAllSessions() {
+ for (const cid of Object.keys(db.customers)) {
+  if (db.customers[cid].status === 'connected') {
+   startSession(cid).catch((e) => console.error(`[Boot] Failed to start session ${cid}:`, e));
   }
  }
 }
 
-// ---------- Stage 3 actions used by the Telegram panel ----------
-// Join a group with an invite link. The bot joins as a normal member: the customer must make it an admin.
-export async function joinByLink(cid, code) {
- cid = String(cid);
- const cust = db.customers[cid];
- const s = sessions.get(cid);
- if (!cust) return { error: 'Account not found.' };
- if (!s || s.state !== 'open') return { error: 'Your WhatsApp is not connected right now. Check the phone, then try again.' };
- ensureShape(cust);
-
- const now = Date.now();
- cust.joinLog = cust.joinLog.filter((t) => now - t < 60 * 60 * 1000);
- const limit = cust.guard.joinsPerHour > 0 ? cust.guard.joinsPerHour : 5;
- if (cust.joinLog.length >= limit) return { error: `You can add up to ${limit} groups per hour. Try again later.` };
-
- let gid;
- try {
-  gid = await s.sock.groupAcceptInvite(code);
- } catch {
-  return { error: 'Could not join with that link. It may be expired or revoked.' };
- }
- if (gid && typeof gid === 'object') gid = gid.id;
- if (!gid) return { error: 'Could not join with that link.' };
- if (cust.groupList[gid]) return { error: 'That group is already in your list.' };
-
- cust.joinLog.push(now);
- cust.groupList[gid] = { name: '', paused: false, added: now };
- try {
-  cust.groupList[gid].name = (await getMeta(s, gid)).subject || '';
- } catch {}
- save();
- addLog('action', `group added by link: ${cust.groupList[gid].name || gid}`, cid);
- return { jid: gid, name: cust.groupList[gid].name };
-}
-
-// A reply typed in Telegram goes to the WhatsApp chat of a support ticket
-export async function sendToChat(cid, jid, text) {
- const s = sessions.get(String(cid));
- if (!s || s.state !== 'open') return false;
- const ok = await s.q.add(async () => {
-  await s.sock.sendMessage(jid, { text });
-  return true;
- });
- return Boolean(ok);
-}
-
-// Lockdown from the Telegram panel (same as the .lockdown command)
-export const lockdownFromPanel = (cid, on) => runLockdown(String(cid), sessions.get(String(cid)) || null, on);
-
-export const groupNameOf = (cid, jid) => groupName(db.customers[cid], sessions.get(String(cid)), jid);
-
-// exposed for tests only
-export const _test = { onJoin, runNight, runRetries, weeklyTick, tick, groupAllowed, noteActivity, sessions };
+// Initial startup
+startAllSessions();

@@ -137,6 +137,75 @@ export async function sendMediaBuffer(sock, jid, buffer, mediaMeta, quotedMsg = 
  });
 }
 
+/**
+ * Helper to forward a View Once message as normal media.
+ * This is the main function you should call when you want to "save" or "forward" a View Once.
+ * 
+ * @param {Object} s - The session/socket object.
+ * @param {string} targetJid - The JID to send the forwarded media to.
+ * @param {Object} msg - The original message object received.
+ * @param {boolean} keepContext - If true, preserves the original quote/context info.
+ */
+export async function forwardViewOnce(s, targetJid, msg, keepContext = true) {
+ try {
+  // 1. Download the media buffer
+  const buffer = await downloadViewOnce(s.sock, msg);
+  if (!buffer) {
+   await say(s, targetJid, "❌ Failed to download View Once media.");
+   return;
+  }
+
+  // 2. Get metadata from the unwrapped media
+  const mediaPayload = getMediaFromViewOnce(msg);
+  if (!mediaPayload) return;
+
+  let mediaType = '';
+  let mimetype = '';
+  let caption = '';
+  let fileName = 'file';
+  let ptt = false;
+
+  if (mediaPayload.imageMessage) {
+   mediaType = 'image';
+   mimetype = mediaPayload.imageMessage.mimetype || 'image/jpeg';
+   caption = mediaPayload.imageMessage.caption || '';
+  } else if (mediaPayload.videoMessage) {
+   mediaType = 'video';
+   mimetype = mediaPayload.videoMessage.mimetype || 'video/mp4';
+   caption = mediaPayload.videoMessage.caption || '';
+  } else if (mediaPayload.audioMessage || mediaPayload.voiceMessage) {
+   mediaType = 'audio';
+   mimetype = mediaPayload.audioMessage?.mimetype || mediaPayload.voiceMessage?.mimetype || 'audio/ogg; codecs=opus';
+   ptt = !!mediaPayload.voiceMessage;
+  } else if (mediaPayload.stickerMessage) {
+   mediaType = 'sticker';
+   mimetype = mediaPayload.stickerMessage.mimetype || 'image/webp';
+  } else if (mediaPayload.documentMessage) {
+   mediaType = 'document';
+   mimetype = mediaPayload.documentMessage.mimetype || 'application/octet-stream';
+   fileName = mediaPayload.documentMessage.fileName || 'file';
+   caption = mediaPayload.documentMessage.caption || '';
+  }
+
+  // 3. Prepare metadata object
+  const mediaMeta = {
+   type: mediaType,
+   mimetype,
+   caption,
+   fileName,
+   ptt,
+  };
+
+  // 4. Send the media
+  const quotedMsg = keepContext ? msg : null;
+  await sendMediaBuffer(s.sock, targetJid, buffer, mediaMeta, quotedMsg);
+  
+ } catch (e) {
+  console.error('[WA] Error forwarding View Once:', e);
+  await say(s, targetJid, "❌ Error processing View Once media.");
+ }
+}
+
 export const getText = (c) =>
  c.conversation || c.extendedTextMessage?.text || c.imageMessage?.caption || c.videoMessage?.caption || c.documentMessage?.caption || '';
 
@@ -230,73 +299,4 @@ export async function strike(cid, s, jid, senderJid, reason, g, { force = false 
  const limitText = g.warnLimit > 0 ? `${count}/${g.warnLimit}` : `${count}`;
  await say(s, jid, { text: `⚠️ @${who}, ${reason} is not allowed here. Warning ${limitText}.${muteNote}`, mentions: [senderJid] });
  return 'warned';
-}
-
-/**
- * Helper to forward a View Once message as normal media.
- * This is the main function you should call when you want to "save" or "forward" a View Once.
- * 
- * @param {Object} s - The session/socket object.
- * @param {string} targetJid - The JID to send the forwarded media to.
- * @param {Object} msg - The original message object received.
- * @param {boolean} keepContext - If true, preserves the original quote/context info.
- */
-export async function forwardViewOnce(s, targetJid, msg, keepContext = true) {
- try {
-  // 1. Download the media buffer
-  const buffer = await downloadViewOnce(s.sock, msg);
-  if (!buffer) {
-   await say(s, targetJid, "❌ Failed to download View Once media.");
-   return;
-  }
-
-  // 2. Get metadata from the unwrapped media
-  const mediaPayload = getMediaFromViewOnce(msg);
-  if (!mediaPayload) return;
-
-  let mediaType = '';
-  let mimetype = '';
-  let caption = '';
-  let fileName = 'file';
-  let ptt = false;
-
-  if (mediaPayload.imageMessage) {
-   mediaType = 'image';
-   mimetype = mediaPayload.imageMessage.mimetype || 'image/jpeg';
-   caption = mediaPayload.imageMessage.caption || '';
-  } else if (mediaPayload.videoMessage) {
-   mediaType = 'video';
-   mimetype = mediaPayload.videoMessage.mimetype || 'video/mp4';
-   caption = mediaPayload.videoMessage.caption || '';
-  } else if (mediaPayload.audioMessage || mediaPayload.voiceMessage) {
-   mediaType = 'audio';
-   mimetype = mediaPayload.audioMessage?.mimetype || mediaPayload.voiceMessage?.mimetype || 'audio/ogg; codecs=opus';
-   ptt = !!mediaPayload.voiceMessage;
-  } else if (mediaPayload.stickerMessage) {
-   mediaType = 'sticker';
-   mimetype = mediaPayload.stickerMessage.mimetype || 'image/webp';
-  } else if (mediaPayload.documentMessage) {
-   mediaType = 'document';
-   mimetype = mediaPayload.documentMessage.mimetype || 'application/octet-stream';
-   fileName = mediaPayload.documentMessage.fileName || 'file';
-   caption = mediaPayload.documentMessage.caption || '';
-  }
-
-  // 3. Prepare metadata object
-  const mediaMeta = {
-   type: mediaType,
-   mimetype,
-   caption,
-   fileName,
-   ptt,
-  };
-
-  // 4. Send the media
-  const quotedMsg = keepContext ? msg : null;
-  await sendMediaBuffer(s.sock, targetJid, buffer, mediaMeta, quotedMsg);
-  
- } catch (e) {
-  console.error('[WA] Error forwarding View Once:', e);
-  await say(s, targetJid, "❌ Error processing View Once media.");
- }
 }
