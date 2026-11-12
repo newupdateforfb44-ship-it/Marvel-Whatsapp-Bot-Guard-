@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import config from '../config.js';
 import { db, save, usedSlots, removeCustomer, addLog, flush } from './store.js';
-import { stopSession, sessionInfo, runningCount, restartSession, restartAll } from './guard.js';
+import { stopSession, sessionInfo, restartSession, restartAll } from './guard.js';
 import { subscriptionTick, resume } from './subs.js';
 import { DAY, LIFETIME, isLifetime, planLabel, fmtExpiry, shortExpiry, subActive, subRequired, extendDays, maxGroups, maxBadWords } from './plans.js';
 import { bot, show, waiting, isOwner, isStaff, canAdmin, msgs } from './tg.js';
@@ -40,6 +40,8 @@ export function audit(ctx, action, c, detail = '') {
   const by = [ctx.from.first_name, ctx.from.username && `@${ctx.from.username}`].filter(Boolean).join(' ') || ctx.from.id;
   addLog('audit', `${isOwner(ctx.from.id) ? 'owner' : 'staff'} ${by}: ${action}${c ? ` · ${nm(c)}` : ''}${detail ? ` · ${detail}` : ''}`, c?.id);
 }
+// number of customers with a live session (works without a runningCount export in guard.js)
+const runningCount = () => Object.values(db.customers).filter((c) => sessionInfo(c.id)).length;
 const tell = (c, text) => bot.api.sendMessage(c.id, text).catch(() => {});
 
 // ---------- admin lock (PIN) ----------
