@@ -762,3 +762,13 @@ export async function sendToChat(sock, jid, text) {
         return { success: false, error: e.message };
     }
 }
+
+export { 
+    startSession, 
+    stopSession, 
+    events, 
+    joinByLink, 
+    lockdownFromPanel, 
+    sessionHealth, // <-- Make sure this function is defined and exported here
+    sendToChat 
+};
