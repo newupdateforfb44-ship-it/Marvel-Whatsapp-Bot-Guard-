@@ -717,21 +717,28 @@ export function sessionInfo(cid) {
         lastMsgAt: s.lastMsgAt,
         drops: s.drops?.length || 0,
         retryCount: s.retry?.length || 0,
-        // Add other fields you need from the session object 's'
     };
 }
 
-// --- FIX FOR RENDER CRASH: Add restartAll export ---
 export async function restartAll() {
- const cids = [...sessions.keys()];
- const results = [];
- for (const cid of cids) {
- try {
- await restartSession(cid);
- results.push({ cid, status: 'restarted' });
- } catch (e) {
- results.push({ cid, status: 'error', error: e.message });
- }
- }
- return results;
+    const cids = [...sessions.keys()];
+    const results = [];
+    for (const cid of cids) {
+        try {
+            await restartSession(cid);
+            results.push({ cid, status: 'restarted' });
+        } catch (e) {
+            results.push({ cid, status: 'error', error: e.message });
+        }
+    }
+    return results;
+}
+
+export async function joinByLink(sock, link) {
+    try {
+        const code = await sock.groupAcceptInvite(link);
+        return { success: true, code };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
 }
