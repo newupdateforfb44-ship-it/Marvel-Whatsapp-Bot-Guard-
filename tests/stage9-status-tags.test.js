@@ -15,9 +15,9 @@ const auto = await import('../src/automation.js');
 const aud = ['255700000001@s.whatsapp.net', '255700000002@s.whatsapp.net', '255700000003@s.whatsapp.net',
   '255700000004@s.whatsapp.net', '255700000005@s.whatsapp.net', '255700000006@s.whatsapp.net', '255700000007@s.whatsapp.net'];
 
-test('tags are capped at 5', () => {
+test('tags are capped at 50', () => {
   const t = auto.pickStatusTags(aud.map((a) => a.split('@')[0]), aud);
-  assert.equal(t.length, 5);
+  assert.equal(t.length, 50);
 });
 
 test('non-members are skipped and duplicates removed', () => {
@@ -42,12 +42,12 @@ test('no tags: content unchanged', async () => {
   assert.deepEqual(sent[0], { text: 'Hello' });
 });
 
-test('group tag adds groupMentions, max 2 groups', async () => {
+test('group tag adds groupMentions, max 50 groups', async () => {
   const sent = [];
   const s = { q: { add: (f) => f() }, sock: { sendMessage: async (j, c) => sent.push(c) } };
   await auto.postStatus(s, aud, { text: 'Hi' }, [], [
     { jid: '1@g.us', subject: 'A' }, { jid: '2@g.us', subject: 'B' }, { jid: '3@g.us', subject: 'C' },
   ]);
-  assert.equal(sent[0].contextInfo.groupMentions.length, 2);
+  assert.equal(sent[0].contextInfo.groupMentions.length, 50);
   assert.equal(sent[0].contextInfo.groupMentions[0].groupJid, '1@g.us');
 });
