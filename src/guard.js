@@ -742,3 +742,14 @@ export async function joinByLink(sock, link) {
         return { success: false, error: e.message };
     }
 }
+
+export async function lockdownFromPanel(cid, lock) {
+    const s = sessions.get(String(cid));
+    if (!s) return { success: false, error: 'Session not found' };
+    
+    s.locked = !!lock;
+    // Optional: Send a message to the user or log it
+    console.log(`[Guard] Session ${cid} ${lock ? 'locked' : 'unlocked'} via panel`);
+    
+    return { success: true, locked: s.locked };
+}
