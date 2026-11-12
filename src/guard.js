@@ -700,6 +700,27 @@ export async function startAllSessions() {
 // Initial startup
 startAllSessions();
 
+// Add this function to guard.js
+export function sessionInfo(cid) {
+    const s = sessions.get(String(cid));
+    if (!s) return null;
+    
+    return {
+        cid: String(cid),
+        state: s.state,
+        startedAt: s.startedAt,
+        openedAt: s.openedAt,
+        reconnects: s.reconnects || 0,
+        pairNumber: s.pairNumber,
+        pairRequested: s.pairRequested,
+        stopped: s.stopped,
+        lastMsgAt: s.lastMsgAt,
+        drops: s.drops?.length || 0,
+        retryCount: s.retry?.length || 0,
+        // Add other fields you need from the session object 's'
+    };
+}
+
 // --- FIX FOR RENDER CRASH: Add restartAll export ---
 export async function restartAll() {
  const cids = [...sessions.keys()];
